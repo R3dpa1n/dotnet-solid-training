@@ -1,0 +1,31 @@
+[*.cs]
+
+# S110: Inheritance tree of classes should not be too deep
+dotnet_diagnostic.S110.severity = warning
+
+# S104: Files should not have too many lines of code
+dotnet_diagnostic.S104.severity = warning
+
+# S134: Control flow statements "if", "switch", "for", "foreach", "while", "do"  and "try" should not be nested too deeply
+dotnet_diagnostic.S134.severity = warning
+
+# S138: Functions should not have too many lines of code
+dotnet_diagnostic.S138.severity = warning
+
+# S1067: Expressions should not be too complex
+dotnet_diagnostic.S1067.severity = warning
+
+# S1151: "switch case" clauses should not have too many lines of code
+dotnet_diagnostic.S1151.severity = warning
+
+# S1200: Classes should not be coupled to too many other classes (Single Responsibility Principle)
+dotnet_diagnostic.S1200.severity = warning
+
+# S1541: Methods and properties should not be too complex
+dotnet_diagnostic.S1541.severity = warning
+
+# S3776: Cognitive Complexity of methods should not be too high
+dotnet_diagnostic.S3776.severity = warning
+
+# S4144: Methods should not have identical implementations
+dotnet_diagnostic.S4144.severity = warning
