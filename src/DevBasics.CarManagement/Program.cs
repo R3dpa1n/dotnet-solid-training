@@ -1,5 +1,6 @@
 ﻿using AutoMapper;
 using DevBasics.CarManagement.Dependencies;
+using DevBasics.CarManagement.Helper;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
@@ -24,11 +25,14 @@ namespace DevBasics.CarManagement
                 .AddTransient<ICarRegistrationRepository, CarRegistrationRepository>()
                 .AddTransient<MapperConfiguration>(_ => new MapperConfiguration(configuration => new CarRegistrationModel().CreateMappings(configuration)))
                 .AddTransient<IMapper>(provider => provider.GetRequiredService<MapperConfiguration>().CreateMapper())
-                .AddTransient<ICarManagementService, CarManagementService>();
+                .AddTransient<IRegisterCarService, RegisterCarService>()
+                .AddTransient<ICarDataHelper, CarDataHelper>()
+                .AddTransient<IRegistrationHelper, RegistrationHelper>()
+                .AddTransient<ITransactionService, TransactionService>();
 
             IServiceProvider provider = service.BuildServiceProvider();
 
-            ICarManagementService carManagementServiceFactory = provider.GetRequiredService<ICarManagementService>();
+            IRegisterCarService carManagementServiceFactory = provider.GetRequiredService<IRegisterCarService>();
 
             await carManagementServiceFactory.RegisterCarsAsync(
                 new RegisterCarsModel

@@ -11,13 +11,7 @@ namespace DevBasics.CarManagement
 
         public HttpHeaderSettings HttpHeader { get; set; }
 
-        public IKowoLeasingApiClient ApiClient { get; set; }
-
         public IBulkRegistrationService BulkRegistrationService { get; set; }
-
-        public ITransactionStateService TransactionStateService { get; set; }
-
-        public IRegistrationDetailService RegistrationDetailService { get; set; }
 
         public ILeasingRegistrationRepository LeasingRegistrationRepository { get; set; }
 
@@ -26,24 +20,13 @@ namespace DevBasics.CarManagement
         public BaseService(
             CarManagementSettings settings,
             HttpHeaderSettings httpHeader,
-            IKowoLeasingApiClient apiClient,
             IBulkRegistrationService bulkRegistrationService = null,
-            ITransactionStateService transactionStateService = null,
-            IRegistrationDetailService registrationDetailService = null,
             ILeasingRegistrationRepository leasingRegistrationRepository = null,
             ICarRegistrationRepository carLeasingRepository = null)
         {
-            // Mandatory
             Settings = settings;
             HttpHeader = httpHeader;
-            ApiClient = apiClient;
-
-            // Optional Services
             BulkRegistrationService = bulkRegistrationService;
-            TransactionStateService = transactionStateService;
-            RegistrationDetailService = registrationDetailService;
-
-            // Optional Repositories
             LeasingRegistrationRepository = leasingRegistrationRepository;
             CarLeasingRepository = carLeasingRepository;
         }
@@ -58,7 +41,7 @@ namespace DevBasics.CarManagement
 
                 if (settingResult == null)
                 {
-                    throw new Exception("Error while retrieving settings from database");
+					throw new Exception("Error while retrieving settings from database");
                 }
 
                 RequestContext requestContext = new RequestContext()

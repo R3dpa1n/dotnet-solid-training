@@ -3,9 +3,8 @@ using System.Threading.Tasks;
 
 namespace DevBasics.CarManagement
 {
-	public interface ICarManagementService
+	public interface IRegisterCarService
 	{
-		bool HasMissingData(CarRegistrationModel car);
 		Task<ServiceResult> RegisterCarsAsync(RegisterCarsModel registerCarsModel, bool isForcedRegistration, Claims claims, string identity = "Unknown");
 	}
 }
