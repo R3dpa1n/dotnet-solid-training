@@ -5,20 +5,20 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Principal;
 using System.Threading.Tasks;
+using System.Transactions;
 using static DevBasics.CarManagement.Dependencies.RegistrationApiResponseBase;
 
 namespace DevBasics.CarManagement
 {
 	public class RegisterCarService : BaseService, IRegisterCarService
 	{
-		private readonly IMapper _mapper;
 		private readonly ICarDataHelper carDataHelper;
 		private readonly IRegistrationHelper registrationHelper;
 		private readonly ITransactionService transactionService;
 
 		public RegisterCarService(
-			IMapper mapper,
 			CarManagementSettings settings,
 			HttpHeaderSettings httpHeader,
 			IBulkRegistrationService bulkRegisterService,
@@ -36,7 +36,6 @@ namespace DevBasics.CarManagement
 		{
 			Console.WriteLine($"Initializing service {nameof(RegisterCarService)}");
 
-			_mapper = mapper;
 			this.carDataHelper = carDataHelper;
 			this.registrationHelper = registrationHelper;
 			this.transactionService = transactionService;
@@ -82,13 +81,12 @@ namespace DevBasics.CarManagement
 
 				CarPoolNumberHelper.Generate(
 					CarBrand.Toyota,
-					registerCarsModel.Cars.FirstOrDefault().CarPool,
+					registerCarsModel.Cars.FirstOrDefault()!.CarPool,
 					out string registrationId,
 					out string carPoolNumber);
 
 				Console.WriteLine($"Created unique car pool number {carPoolNumber} and registration id {registrationId}");
 
-				DateTime today = DateTime.Now.Date;
 				foreach (CarRegistrationModel car in registerCarsModel.Cars)
 				{
 					car.CarPoolNumber = carPoolNumber;
@@ -97,20 +95,9 @@ namespace DevBasics.CarManagement
 					// See Bug 281.
 					if (string.IsNullOrWhiteSpace(car.ErpRegistrationNumber))
 					{
-						// See Feature 182.
-						if (car.DeliveryDate == null)
-						{
-							DateTime delivery = today.AddDays(-1);
-							car.DeliveryDate = delivery;
-						}
+						AddDeliveryDate(car);
 
-						// See Feature 182.
-						if (string.IsNullOrWhiteSpace(car.ErpDeliveryNumber))
-						{
-							car.ErpDeliveryNumber = registrationId;
-
-							Console.WriteLine($"Car {car.VehicleIdentificationNumber} has no value for Delivery Number: Setting default value to registration id {registrationId}");
-						}
+						AddErpDeliveryNumber(car, registrationId);
 					}
 
 					bool hasMissingData = carDataHelper.HasMissingData(car);
@@ -125,7 +112,7 @@ namespace DevBasics.CarManagement
 
 				registerCarsModel.VendorId = registerCarsModel.Cars.Select(x => x.CompanyId).FirstOrDefault();
 				registerCarsModel.CompanyId = registerCarsModel.VendorId;
-				registerCarsModel.CustomerId = registerCarsModel.Cars.FirstOrDefault().CustomerId;
+				registerCarsModel.CustomerId = registerCarsModel.Cars.FirstOrDefault()!.CustomerId;
 
 				RegisterCarsResult registrationResult = await new RegistrationService().SaveRegistrations(
 					registerCarsModel, claims, registrationId, identity, isForcedRegistration, CarBrand.Toyota);
@@ -162,55 +149,13 @@ namespace DevBasics.CarManagement
 
 					if (!hasMissingData)
 					{
-						BulkRegistrationRequest requestPayload = null;
-						BulkRegistrationResponse apiTransactionResult = null;
-						try
-						{
-							requestPayload = await MapToModel(RegistrationType.Register, registerCarsModel, transactionId);
-							apiTransactionResult = await BulkRegistrationService.ExecuteRegistrationAsync(requestPayload);
-						}
-						catch (Exception ex)
-						{
-							Console.WriteLine(
-								$"Registering cars for registration with id {registrationResult.RegistrationId} (RegistrationId = {registrationId}) failed. " +
-								$"Database transaction will be finished anyway: {ex}");
-						}
-
-						IList<int> identifier = await transactionService.FinishTransactionAsync(CarLeasingRepository, RegistrationType.Register,
-							apiTransactionResult,
-							registrationResult.RegisteredCars,
-							registerCarsModel.CompanyId,
-							identity);
-
-						// Mapping to model that is excpected by the UI.
-						serviceResult = MapToModel(serviceResult,
-							apiTransactionResult,
-							requestPayload?.TransactionId,
-							identifier,
-							registrationId);
+						serviceResult = ExecuteBulkRegistration(registerCarsModel, transactionId, registrationResult, registrationId, identity, serviceResult).Result;
 					}
 					else
 					{
 						Console.WriteLine($"Car has missing data. Trying to set transaction status to {TransactionResult.MissingData}");
 
-						IEnumerable<IGrouping<string, CarRegistrationModel>> group = registerCarsModel.Cars.GroupBy(x => x.RegistrationId);
-						foreach (IGrouping<string, CarRegistrationModel> grp in group)
-						{
-							IList<CarRegistrationModel> dbApiCars = await CarLeasingRepository.GetApiRegisteredCarsAsync(grp.Key);
-							foreach (CarRegistrationModel dbApiCar in dbApiCars)
-							{
-								CarRegistrationDto dbCar = new CarRegistrationDto
-								{
-									RegistrationId = dbApiCar.RegistrationId
-								};
-
-								dbCar.TransactionState = (int?)TransactionResult.MissingData;
-								await CarLeasingRepository.UpdateRegisteredCarAsync(dbCar, identity);
-
-								Console.WriteLine($"Updated car {dbApiCar.VehicleIdentificationNumber} to database. " +
-									$"Car (serialized as JSON): {JsonConvert.SerializeObject(dbApiCar)}");
-							}
-						}
+						await UpdateRegisteredCarsWithUpdatedData(registerCarsModel, identity);
 
 						serviceResult.RegistrationId = registrationResult.RegistrationId;
 						serviceResult.Message = TransactionResult.MissingData.ToString();
@@ -222,54 +167,54 @@ namespace DevBasics.CarManagement
 				}
 				else
 				{
-					string uiResponseStatusMsg = string.Empty;
 					Console.WriteLine(
 						$"Nothing to do, the list of cars to register is empty! Returning empty result with HTTP 200. " +
 						$"(RegistrationId = {registrationResult.RegistrationId})");
 
-					IEnumerable<IGrouping<string, CarRegistrationModel>> group = registerCarsModel.Cars.GroupBy(x => x.RegistrationId);
+					// ANNAHME: Laut Message darüber ist nichts zu tun, => der nachfolgende Code kann gelöscht werden!
 
-					foreach (IGrouping<string, CarRegistrationModel> grp in group)
-					{
-						IList<CarRegistrationModel> dbApiCars = await CarLeasingRepository.GetApiRegisteredCarsAsync(grp.Key);
+					////IEnumerable<IGrouping<string, CarRegistrationModel>> group = registerCarsModel.Cars.GroupBy(x => x.RegistrationId);
 
-						foreach (CarRegistrationModel dbApiCar in dbApiCars)
-						{
-							CarRegistrationDto dbCar = new CarRegistrationDto
-							{
-								RegistrationId = dbApiCar.RegistrationId
-							};
+					////foreach (IGrouping<string, CarRegistrationModel> grp in group)
+					////{
+					////	IList<CarRegistrationModel> dbApiCars = await CarLeasingRepository.GetApiRegisteredCarsAsync(grp.Key);
 
-							bool hasMissingData = carDataHelper.HasMissingData(dbApiCar);
-							if (registerCarsModel.DeactivateAutoRegistrationProcessing && !hasMissingData)
-							{
-								Console.WriteLine(
-									$"Automatic registration is deactivated (value = {registerCarsModel.DeactivateAutoRegistrationProcessing})" +
-									$"and contains all relevant data (HasMissingData = {hasMissingData}). " +
-									$"Set the transaction status of car {dbApiCar.VehicleIdentificationNumber} to {TransactionResult.ActionRequired.ToString()}" +
-									$"Car (serialized as JSON): {dbCar}");
+					////	foreach (CarRegistrationModel dbApiCar in dbApiCars)
+					////	{
+					////		CarRegistrationDto dbCar = new CarRegistrationDto
+					////		{
+					////			RegistrationId = dbApiCar.RegistrationId
+					////		};
 
-								dbCar.TransactionState = (int?)TransactionResult.ActionRequired;
-								uiResponseStatusMsg = ApiResult.WARNING.ToString();
-							}
-							else
-							{
-								Console.WriteLine(
-									$"Automatic registration is activated (value = {registerCarsModel.DeactivateAutoRegistrationProcessing}) " +
-									$"or car doesn't contain all relevant data (HasMissingData = {hasMissingData}) or both. " +
-									$"Set the transaction status of car {dbApiCar.VehicleIdentificationNumber} to {TransactionResult.MissingData.ToString()}. " +
-									$"Car (serialized as JSON): {dbCar}");
+					////		bool hasMissingData = carDataHelper.HasMissingData(dbApiCar);
+					////		if (registerCarsModel.DeactivateAutoRegistrationProcessing && !hasMissingData)
+					////		{
+					////			Console.WriteLine(
+					////				$"Automatic registration is deactivated (value = {registerCarsModel.DeactivateAutoRegistrationProcessing})" +
+					////				$"and contains all relevant data (HasMissingData = {hasMissingData}). " +
+					////				$"Set the transaction status of car {dbApiCar.VehicleIdentificationNumber} to {TransactionResult.ActionRequired.ToString()}" +
+					////				$"Car (serialized as JSON): {dbCar}");
 
-								dbCar.TransactionState = (int?)TransactionResult.MissingData;
-								uiResponseStatusMsg = TransactionResult.MissingData.ToString();
-							}
+					////			dbCar.TransactionState = (int?)TransactionResult.ActionRequired;
+					////			uiResponseStatusMsg = ApiResult.WARNING.ToString();
+					////		}
+					////		else
+					////		{
+					////			Console.WriteLine(
+					////				$"Automatic registration is activated (value = {registerCarsModel.DeactivateAutoRegistrationProcessing}) " +
+					////				$"or car doesn't contain all relevant data (HasMissingData = {hasMissingData}) or both. " +
+					////				$"Set the transaction status of car {dbApiCar.VehicleIdentificationNumber} to {TransactionResult.MissingData.ToString()}. " +
+					////				$"Car (serialized as JSON): {dbCar}");
 
-							await new CarRegistrationRepository(LeasingRegistrationRepository, BulkRegistrationService, _mapper).UpdateRegisteredCarAsync(dbCar, identity);
-						}
-					}
+					////			dbCar.TransactionState = (int?)TransactionResult.MissingData;
+					////			uiResponseStatusMsg = TransactionResult.MissingData.ToString();
+					////		}
+
+					////		await new CarRegistrationRepository(LeasingRegistrationRepository, BulkRegistrationService, _mapper).UpdateRegisteredCarAsync(dbCar, identity);
+					////	}
+					////}
 
 					serviceResult.RegistrationId = registrationId;
-					serviceResult.Message = uiResponseStatusMsg;
 				}
 
 				return serviceResult;
@@ -279,6 +224,59 @@ namespace DevBasics.CarManagement
 				Console.WriteLine($"Error saving registration for {CarBrand.Toyota} application: {ex}");
 				throw;
 			}
+		}
+
+		private async Task UpdateRegisteredCarsWithUpdatedData(RegisterCarsModel registerCarsModel, string identity)
+		{
+			IEnumerable<IGrouping<string, CarRegistrationModel>> group = registerCarsModel.Cars.GroupBy(x => x.RegistrationId);
+
+			foreach (IGrouping<string, CarRegistrationModel> grp in group)
+			{
+				IList<CarRegistrationModel> dbApiCars = await CarLeasingRepository.GetApiRegisteredCarsAsync(grp.Key);
+				foreach (CarRegistrationModel dbApiCar in dbApiCars)
+				{
+					CarRegistrationDto dbCar = new CarRegistrationDto
+					{
+						RegistrationId = dbApiCar.RegistrationId
+					};
+
+					dbCar.TransactionState = (int?)TransactionResult.MissingData;
+					await CarLeasingRepository.UpdateRegisteredCarAsync(dbCar, identity);
+
+					Console.WriteLine($"Updated car {dbApiCar.VehicleIdentificationNumber} to database. " +
+						$"Car (serialized as JSON): {JsonConvert.SerializeObject(dbApiCar)}");
+				}
+			}
+		}
+
+		private async Task<ServiceResult> ExecuteBulkRegistration(RegisterCarsModel registerCarsModel, string transactionId, RegisterCarsResult registrationResult, string registrationId, string identity, ServiceResult serviceResult)
+		{
+			BulkRegistrationRequest requestPayload = null;
+			BulkRegistrationResponse apiTransactionResult = null;
+			try
+			{
+				requestPayload = await MapToModel(RegistrationType.Register, registerCarsModel, transactionId);
+				apiTransactionResult = await BulkRegistrationService.ExecuteRegistrationAsync(requestPayload);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine(
+					$"Registering cars for registration with id {registrationResult.RegistrationId} (RegistrationId = {registrationId}) failed. " +
+					$"Database transaction will be finished anyway: {ex}");
+			}
+
+			IList<int> identifier = await transactionService.FinishTransactionAsync(CarLeasingRepository, RegistrationType.Register,
+				apiTransactionResult,
+				registrationResult.RegisteredCars,
+				registerCarsModel.CompanyId,
+				identity);
+
+			// Mapping to model that is excpected by the UI.
+			return MapToModel(serviceResult,
+				apiTransactionResult,
+				requestPayload?.TransactionId,
+				identifier,
+				registrationId);
 		}
 
 		private async Task<BulkRegistrationRequest> MapToModel(RegistrationType registrationType, RegisterCarsModel cars, string transactionId)
@@ -322,7 +320,7 @@ namespace DevBasics.CarManagement
 			{
 				Console.WriteLine($"Mapping registration to request model failed. Data (serialized as JSON): {JsonConvert.SerializeObject(cars)}: {ex}");
 
-				throw ex;
+				throw;
 			}
 
 			return requestModel;
@@ -362,9 +360,9 @@ namespace DevBasics.CarManagement
 
 			List<List<IGrouping<string, CarRegistrationModel>>> groupedCars = cars
 				.GroupBy(x => x.DeliveryDate)
-				.Select(grp => grp.ToList())
-				.ToList()
-				.Select(y => y.ToList().GroupBy(z => z.ErpDeliveryNumber))
+				.Select(grp => grp.AsEnumerable())
+				.AsEnumerable()
+				.Select(y => y.AsEnumerable().GroupBy(z => z.ErpDeliveryNumber))
 				.Select(grp => grp.ToList())
 				.ToList();
 
@@ -378,13 +376,13 @@ namespace DevBasics.CarManagement
 						carsOfGroup.Add(new CarRequest() { VehicleIdentificationNumber = car.VehicleIdentificationNumber, AssetTag = string.Empty });
 					}
 
-					DateTime deliveryDate = carList.FirstOrDefault().DeliveryDate.Value;
+					DateTime deliveryDate = carList.FirstOrDefault()!.DeliveryDate.Value;
 					string convertedDeliveryDate = string.Format("{0}-{1}-{2}T{3:00}:{4:00}:{5:00}Z",
 						deliveryDate.Year, deliveryDate.Month, deliveryDate.Day, deliveryDate.Hour, deliveryDate.Minute, deliveryDate.Second);
 
 					deliveryGroups.Add(new DeliveryRequest()
 					{
-						DeliveryNumber = carList.FirstOrDefault().ErpDeliveryNumber,
+						DeliveryNumber = carList.FirstOrDefault()!.ErpDeliveryNumber,
 						DeliveryDate = convertedDeliveryDate,
 						Cars = carsOfGroup
 					});
@@ -414,7 +412,7 @@ namespace DevBasics.CarManagement
 			{
 				Console.WriteLine($"Generating internal Transaction ID and initializing transaction failed. Cars: {string.Join(", ", cars)}: {ex}");
 
-				throw ex;
+				throw;
 			}
 		}
 	}

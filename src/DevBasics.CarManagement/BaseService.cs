@@ -1,11 +1,12 @@
 ﻿using DevBasics.CarManagement.Dependencies;
+using DevBasics.CarManagement.Exceptions;
 using Newtonsoft.Json;
 using System;
 using System.Threading.Tasks;
 
 namespace DevBasics.CarManagement
 {
-    public class BaseService
+	public class BaseService
     {
         public CarManagementSettings Settings { get; set; }
 
@@ -41,7 +42,7 @@ namespace DevBasics.CarManagement
 
                 if (settingResult == null)
                 {
-					throw new Exception("Error while retrieving settings from database");
+					throw new AppSettingException("Error while retrieving settings from database");
                 }
 
                 RequestContext requestContext = new RequestContext()
@@ -61,5 +62,31 @@ namespace DevBasics.CarManagement
                 return null;
             }
         }
+
+		// See Feature 182.
+		public static CarRegistrationModel AddDeliveryDate(CarRegistrationModel car)
+		{
+			if (car.DeliveryDate == null)
+			{
+				DateTime today = DateTime.Now.Date;
+				DateTime delivery = today.AddDays(-1);
+				car.DeliveryDate = delivery;
+			}
+
+			return car;
+		}
+
+        public static CarRegistrationModel AddErpDeliveryNumber(CarRegistrationModel car, string registrationId)
+        {
+			// See Feature 182.
+			if (string.IsNullOrWhiteSpace(car.ErpDeliveryNumber))
+			{
+				car.ErpDeliveryNumber = registrationId;
+
+				Console.WriteLine($"Car {car.VehicleIdentificationNumber} has no value for Delivery Number: Setting default value to registration id {registrationId}");
+			}
+
+            return car;
+		}
     }
 }
